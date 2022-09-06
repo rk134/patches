@@ -1,0 +1,263 @@
+From fd6dd1d45f4c57ecef8cb4bb35304468da657c74 Mon Sep 17 00:00:00 2001
+From: Rahul K <rahul-k@bigdi.cc>
+Date: Tue, 6 Sep 2022 19:54:49 +0000
+Subject: [PATCH] base: BatteryService: Add support for DART_CHARGING (33w)
+
+Signed-off-by: Rahul K <rahul-k@bigdi.cc>
+---
+ core/java/android/os/BatteryManager.java      |  7 +++++
+ core/res/res/values/custom_config.xml         |  3 +++
+ core/res/res/values/custom_symbols.xml        |  3 +++
+ .../settingslib/fuelgauge/BatteryStatus.java  | 16 ++++++++----
+ .../SystemUI/res/values/custom_strings.xml    |  6 +++++
+ .../keyguard/KeyguardUpdateMonitor.java       |  7 ++++-
+ .../KeyguardIndicationController.java         |  5 ++++
+ .../com/android/server/BatteryService.java    | 26 +++++++++++++++++++
+ 8 files changed, 67 insertions(+), 6 deletions(-)
+
+diff --git a/core/java/android/os/BatteryManager.java b/core/java/android/os/BatteryManager.java
+index ec7e6111..9fb64981 100644
+--- a/core/java/android/os/BatteryManager.java
++++ b/core/java/android/os/BatteryManager.java
+@@ -170,6 +170,13 @@ public class BatteryManager {
+      */
+     public static final String EXTRA_OEM_FAST_CHARGER = "oem_fast_charger";
+ 
++    /**
++     * Extra for {@link android.content.Intent#ACTION_BATTERY_CHANGED}:
++     * boolean value to detect fast charging
++     * {@hide}
++     */
++    public static final String EXTRA_DART_CHARGER = "dart_charger";
++
+     /**
+      * Extra for {@link android.content.Intent#ACTION_BATTERY_CHANGED}:
+      * Contains a value that forces Moto Mod battery level `mod_level`
+diff --git a/core/res/res/values/custom_config.xml b/core/res/res/values/custom_config.xml
+index 7ac3ed2d..fe03496e 100644
+--- a/core/res/res/values/custom_config.xml
++++ b/core/res/res/values/custom_config.xml
+@@ -216,4 +216,7 @@
+ 
+     <!-- Expected value from fast charging status file  -->
+     <string name="config_oemFastChargerStatusValue" translatable="false">1</string>
++
++     <!-- Dart charging support -->
++    <string name="config_hasDartCharger" translatable="false"></string>
+ </resources>
+diff --git a/core/res/res/values/custom_symbols.xml b/core/res/res/values/custom_symbols.xml
+index 32ac4f7e..c87797d2 100644
+--- a/core/res/res/values/custom_symbols.xml
++++ b/core/res/res/values/custom_symbols.xml
+@@ -128,4 +128,7 @@
+ 
+     <!-- Expected value from fast charging status file -->
+     <java-symbol type="string" name="config_oemFastChargerStatusValue" />
++
++    <!-- Whether device has Dart charging support -->
++    <java-symbol type="bool" name="config_hasDartCharger" />
+ </resources>
+diff --git a/packages/SettingsLib/src/com/android/settingslib/fuelgauge/BatteryStatus.java b/packages/SettingsLib/src/com/android/settingslib/fuelgauge/BatteryStatus.java
+index 3e6842f5..3f5ebcfc 100644
+--- a/packages/SettingsLib/src/com/android/settingslib/fuelgauge/BatteryStatus.java
++++ b/packages/SettingsLib/src/com/android/settingslib/fuelgauge/BatteryStatus.java
+@@ -28,6 +28,7 @@ import static android.os.BatteryManager.EXTRA_PLUGGED;
+ import static android.os.BatteryManager.EXTRA_PRESENT;
+ import static android.os.BatteryManager.EXTRA_STATUS;
+ import static android.os.BatteryManager.EXTRA_OEM_FAST_CHARGER;
++import static android.os.BatteryManager.EXTRA_DART_CHARGER;
+ 
+ import android.content.Context;
+ import android.content.Intent;
+@@ -46,6 +47,7 @@ public class BatteryStatus {
+     public static final int CHARGING_SLOWLY = 0;
+     public static final int CHARGING_REGULAR = 1;
+     public static final int CHARGING_FAST = 2;
++    public static final int CHARGING_DART = 3;
+ 
+     public final int status;
+     public final int level;
+@@ -53,16 +55,18 @@ public class BatteryStatus {
+     public final int health;
+     public final int maxChargingWattage;
+     public final boolean oemFastChargeStatus;
++    public final boolean dartChargeStatus;
+     public final boolean present;
+ 
+     public BatteryStatus(int status, int level, int plugged, int health,
+-            int maxChargingWattage, boolean oemFastChargeStatus, boolean present) {
++            int maxChargingWattage, boolean oemFastChargeStatus, boolean dartChargeStatus, boolean present) {
+         this.status = status;
+         this.level = level;
+         this.plugged = plugged;
+         this.health = health;
+         this.maxChargingWattage = maxChargingWattage;
+         this.oemFastChargeStatus = oemFastChargeStatus;
++        this.dartChargeStatus = dartChargeStatus;
+         this.present = present;
+     }
+ 
+@@ -72,6 +76,7 @@ public class BatteryStatus {
+         level = batteryChangedIntent.getIntExtra(EXTRA_LEVEL, 0);
+         health = batteryChangedIntent.getIntExtra(EXTRA_HEALTH, BATTERY_HEALTH_UNKNOWN);
+         oemFastChargeStatus = batteryChangedIntent.getBooleanExtra(EXTRA_OEM_FAST_CHARGER, false);
++        dartChargeStatus = batteryChangedIntent.getBooleanExtra(EXTRA_DART_CHARGER, false);
+         present = batteryChangedIntent.getBooleanExtra(EXTRA_PRESENT, true);
+ 
+         final int maxChargingMicroAmp = batteryChangedIntent.getIntExtra(EXTRA_MAX_CHARGING_CURRENT,
+@@ -163,10 +168,11 @@ public class BatteryStatus {
+                 R.integer.config_chargingSlowlyThreshold);
+         final int fastThreshold = context.getResources().getInteger(
+                 R.integer.config_chargingFastThreshold);
+-        return maxChargingWattage <= 0 ? CHARGING_UNKNOWN :
+-                maxChargingWattage < slowThreshold ? CHARGING_SLOWLY :
+-                        maxChargingWattage > fastThreshold ? CHARGING_FAST :
+-                                CHARGING_REGULAR;
++        return dartChargeStatus ? CHARGING_DART :
++                maxChargingWattage <= 0 ? CHARGING_UNKNOWN :
++                    maxChargingWattage < slowThreshold ? CHARGING_SLOWLY :
++                            maxChargingWattage > fastThreshold ? CHARGING_FAST :
++                                    CHARGING_REGULAR;
+     }
+ 
+     @Override
+diff --git a/packages/SystemUI/res/values/custom_strings.xml b/packages/SystemUI/res/values/custom_strings.xml
+index 96a76cd7..33f201b7 100644
+--- a/packages/SystemUI/res/values/custom_strings.xml
++++ b/packages/SystemUI/res/values/custom_strings.xml
+@@ -23,4 +23,10 @@
+     <string name="quick_settings_powershare_off_powersave_label">Battery Share off\nBattery saver</string>
+     <string name="quick_settings_powershare_off_low_battery_label">Battery Share off\nBattery too low</string>
+     <string name="quick_settings_powershare_enabled_label">Battery Share is enabled</string>
++
++
++    <!-- Indication on the keyguard that is shown when the device is charging with a Dart charger. Should match keyguard_plugged_in_dart_charging [CHAR LIMIT=40]-->
++    <string name="keyguard_indication_dart_charging_time"><xliff:g id="percentage">%2$s</xliff:g> • Dart Charging (<xliff:g id="charging_time_left" example="4 hours and 2 minutes">%1$s</xliff:g> until full)</string>
++    <string name="keyguard_plugged_in_dart_charging"><xliff:g id="percentage">%s</xliff:g> • Dart Charging</string>
++
+ </resources>
+diff --git a/packages/SystemUI/src/com/android/keyguard/KeyguardUpdateMonitor.java b/packages/SystemUI/src/com/android/keyguard/KeyguardUpdateMonitor.java
+index 1776a412..a6dba816 100644
+--- a/packages/SystemUI/src/com/android/keyguard/KeyguardUpdateMonitor.java
++++ b/packages/SystemUI/src/com/android/keyguard/KeyguardUpdateMonitor.java
+@@ -1990,7 +1990,7 @@ public class KeyguardUpdateMonitor implements TrustManager.TrustListener, Dumpab
+         }
+ 
+         // Take a guess at initial SIM state, battery status and PLMN until we get an update
+-        mBatteryStatus = new BatteryStatus(BATTERY_STATUS_UNKNOWN, 100, 0, 0, 0, false, true);
++        mBatteryStatus = new BatteryStatus(BATTERY_STATUS_UNKNOWN, 100, 0, 0, 0, false, false, true);
+ 
+         // Watch for interesting updates
+         final IntentFilter filter = new IntentFilter();
+@@ -3115,6 +3115,11 @@ public class KeyguardUpdateMonitor implements TrustManager.TrustListener, Dumpab
+         if (wasPluggedIn != nowPluggedIn || stateChangedWhilePluggedIn) {
+             return true;
+         }
++    
++	    // change in Dart charging while plugged in
++        if (nowPluggedIn && current.dartChargeStatus != old.dartChargeStatus) {
++            return true;
++        }
+ 
+         // change in battery level
+         if (old.level != current.level) {
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/KeyguardIndicationController.java b/packages/SystemUI/src/com/android/systemui/statusbar/KeyguardIndicationController.java
+index 2c971638..bb82a44f 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/KeyguardIndicationController.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/KeyguardIndicationController.java
+@@ -854,6 +854,11 @@ public class KeyguardIndicationController {
+                             ? R.string.keyguard_indication_charging_time_fast
+                             : R.string.keyguard_plugged_in_charging_fast;
+                     break;
++		        case BatteryStatus.CHARGING_DART:
++                    chargingId = hasChargingTime
++                            ? R.string.keyguard_indication_dart_charging_time
++                            : R.string.keyguard_plugged_in_dart_charging;
++                    break;
+                 case BatteryStatus.CHARGING_SLOWLY:
+                     chargingId = hasChargingTime
+                             ? R.string.keyguard_indication_charging_time_slowly
+diff --git a/services/core/java/com/android/server/BatteryService.java b/services/core/java/com/android/server/BatteryService.java
+index cf1ec29d..5e4f7c3f 100644
+--- a/services/core/java/com/android/server/BatteryService.java
++++ b/services/core/java/com/android/server/BatteryService.java
+@@ -81,8 +81,10 @@ import com.android.server.lights.LogicalLight;
+ import java.io.BufferedReader;
+ import java.io.File;
+ import java.io.FileDescriptor;
++import java.io.FileNotFoundException;
+ import java.io.FileOutputStream;
+ import java.io.FileReader;
++import java.io.FileReader;
+ import java.io.IOException;
+ import java.io.PrintWriter;
+ import java.util.ArrayDeque;
+@@ -191,6 +193,10 @@ public final class BatteryService extends SystemService {
+     private boolean mOemFastCharger;
+     private boolean mLastOemFastCharger;
+ 
++    private boolean mDartCharger;
++    private boolean mHasDartCharger;
++    private boolean mLastDartCharger;
++
+     private long mDischargeStartTime;
+     private int mDischargeStartLevel;
+ 
+@@ -239,6 +245,8 @@ public final class BatteryService extends SystemService {
+         mBatteryStats = BatteryStatsService.getService();
+         mActivityManagerInternal = LocalServices.getService(ActivityManagerInternal.class);
+ 
++	    mHasDartCharger = mContext.getResources().getBoolean(
++                com.android.internal.R.bool.config_hasDartCharger);
+         mCriticalBatteryLevel = mContext.getResources().getInteger(
+                 com.android.internal.R.integer.config_criticalBatteryWarningLevel);
+         mLowBatteryWarningLevel = mContext.getResources().getInteger(
+@@ -639,6 +647,8 @@ public final class BatteryService extends SystemService {
+         shutdownIfNoPowerLocked();
+         shutdownIfOverTempLocked();
+ 
++        mDartCharger = mHasDartCharger && isDartCharger();
++
+         mOemFastCharger = isOemFastCharger();
+ 
+         if (force || (mHealthInfo.batteryStatus != mLastBatteryStatus ||
+@@ -657,6 +667,7 @@ public final class BatteryService extends SystemService {
+                 mBatteryModProps.modFlag != mLastModFlag ||
+                 mBatteryModProps.modType != mLastModType ||
+                 mBatteryModProps.modPowerSource != mLastModPowerSource ||
++                mDartCharger != mLastDartCharger ||
+                 mOemFastCharger != mLastOemFastCharger)) {
+ 
+             if (mPlugType != mLastPlugType) {
+@@ -833,6 +844,7 @@ public final class BatteryService extends SystemService {
+             mLastModFlag = mBatteryModProps.modFlag;
+             mLastModType = mBatteryModProps.modType;
+             mLastModPowerSource = mBatteryModProps.modPowerSource;
++            mLastDartCharger = mDartCharger;
+             mLastOemFastCharger = mOemFastCharger;
+         }
+     }
+@@ -941,6 +953,20 @@ public final class BatteryService extends SystemService {
+ 
+         return false;
+     }
++    
++    private boolean isDartCharger() {
++        try {
++            FileReader file = new FileReader("/sys/class/power_supply/battery/fastcharger");
++            BufferedReader br = new BufferedReader(file);
++            String state = br.readLine();
++            br.close();
++            file.close();
++            return "1".equals(state);
++        } catch (FileNotFoundException e) {
++        } catch (IOException e) {
++        }
++        return false;
++    }
+ 
+     // TODO: Current code doesn't work since "--unplugged" flag in BSS was purposefully removed.
+     private void logBatteryStatsLocked() {
+-- 
+2.25.1
+
