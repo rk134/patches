@@ -1,0 +1,119 @@
+From d875a348d4e34f0e17c9758666634c09b60286cc Mon Sep 17 00:00:00 2001
+From: Maitreya29 <maitreyapatni30@gmail.com>
+Date: Fri, 14 Jan 2022 10:22:14 +0530
+Subject: [PATCH] Settings: Add pitch black theme [2/2]
+
+Change-Id: I48a2d3a06640ea261d8e8e59eccdd67462a421c3
+
+Co-authored-by: Sonal Singh <sonal.singh.19993@gmail.com>
+Signed-off-by: rk134 <spaced@rk134.cf>
+---
+ res/values/custom_strings.xml                 |  4 ++
+ res/xml/display_settings.xml                  |  6 +++
+ src/com/android/settings/DisplaySettings.java | 47 ++++++++++++++++++-
+ 3 files changed, 56 insertions(+), 1 deletion(-)
+
+diff --git a/res/values/custom_strings.xml b/res/values/custom_strings.xml
+index 556a80bb43..8a073f5e30 100644
+--- a/res/values/custom_strings.xml
++++ b/res/values/custom_strings.xml
+@@ -123,4 +123,8 @@
+     <string name="fingerprint_wake_unlock_touch">Listens for events while the screen is off</string>
+     <string name="fingerprint_wake_unlock_press">Only listens for events once the screen is on</string>
+ 
++    <!-- Theme -->
++    <string name="pitch_colors">Pitch black theme</string>
++    <string name="pitch_colors_summary">Pitch black theme for Settings, SystemUI, etc</string>
++
+ </resources>
+diff --git a/res/xml/display_settings.xml b/res/xml/display_settings.xml
+index 92c2b04f46..661a6c1f8d 100644
+--- a/res/xml/display_settings.xml
++++ b/res/xml/display_settings.xml
+@@ -57,6 +57,12 @@
+             settings:keywords="@string/keywords_dark_ui_mode"
+             settings:widgetLayout="@null" />
+ 
++        <SwitchPreference
++            android:title="@string/pitch_colors"
++            android:key="pitch_theme"
++            android:summary="@string/pitch_colors_summary"
++            android:dependency="dark_ui_mode" />
++
+         <Preference
+             android:fragment="com.android.settings.display.ToggleFontSizePreferenceFragment"
+             android:key="font_size"
+diff --git a/src/com/android/settings/DisplaySettings.java b/src/com/android/settings/DisplaySettings.java
+index 73435c6e81..2f0226c7a5 100644
+--- a/src/com/android/settings/DisplaySettings.java
++++ b/src/com/android/settings/DisplaySettings.java
+@@ -42,8 +42,18 @@ import com.android.internal.custom.hardware.LineageHardwareManager;
+ import java.util.ArrayList;
+ import java.util.List;
+ 
++import android.content.om.IOverlayManager;
++import android.os.Bundle;
++import android.os.RemoteException;
++import android.os.ServiceManager;
++import android.os.UserHandle;
++
++import androidx.preference.Preference;
++import androidx.preference.SwitchPreference;
++import androidx.preference.Preference.OnPreferenceChangeListener;
++
+ @SearchIndexable(forTarget = SearchIndexable.ALL & ~SearchIndexable.ARC)
+-public class DisplaySettings extends DashboardFragment {
++public class DisplaySettings extends DashboardFragment implements OnPreferenceChangeListener {
+     private static final String TAG = "DisplaySettings";
+ 
+     private static final String KEY_HIGH_TOUCH_POLLING_RATE = "high_touch_polling_rate_enable";
+@@ -53,11 +63,46 @@ public class DisplaySettings extends DashboardFragment {
+     private PreferenceCategory mRefreshRateCategory;
+     private Context mContext;
+     
++    private SwitchPreference mPitchPreference;
++    IOverlayManager mOverlayManager;
++
+     @Override
+     public int getMetricsCategory() {
+         return SettingsEnums.DISPLAY;
+     }
+ 
++    @Override
++    public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
++        super.onCreatePreferences(savedInstanceState, rootKey);
++        mOverlayManager = IOverlayManager.Stub.asInterface(ServiceManager.getService("overlay"));
++        mPitchPreference = findPreference("pitch_theme");
++        try {
++            mPitchPreference.setChecked(mOverlayManager.getOverlayInfo("com.iron.pitchblacksystem", UserHandle.USER_CURRENT).isEnabled());
++        } catch (RemoteException e) {
++            e.printStackTrace();
++        }
++        mPitchPreference.setOnPreferenceChangeListener(this);
++    }
++
++    @Override
++    public boolean onPreferenceChange(Preference preference, Object newValue) {
++        if (preference == mPitchPreference) {
++            setOverlay("com.iron.pitchblacksystem", (Boolean) newValue);
++            setOverlay("com.iron.pitchblacksettings", (Boolean) newValue);
++            setOverlay("com.iron.pitchblacksystemui", (Boolean) newValue);
++            return true;
++        }
++        return false;
++    }
++
++    private void setOverlay(String overlay, boolean status) {
++       try {
++            mOverlayManager.setEnabled(overlay, status, UserHandle.USER_CURRENT);
++        } catch (RemoteException | IllegalStateException | SecurityException e) {
++            e.printStackTrace();
++        }
++    }
++
+     @Override
+     protected String getLogTag() {
+         return TAG;
+-- 
+2.34.1
+
